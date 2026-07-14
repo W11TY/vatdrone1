@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AeroFold V2 - wing deployment mechanism</title>
+<style>
+  html,body{margin:0;height:100%;background:#101010;overflow:hidden;font-family:sans-serif;}
+  #hint{position:absolute;top:12px;left:16px;color:#999;font-size:12px;}
+  #stage{position:absolute;top:12px;right:16px;color:#f2c94c;font-size:13px;font-weight:600;
+     background:rgba(20,20,20,0.75);padding:6px 12px;border-radius:6px;max-width:340px;text-align:right;}
+  #panel{position:absolute;bottom:16px;left:16px;right:16px;background:rgba(25,25,25,0.9);
+      padding:14px 18px;border-radius:10px;color:#eee;}
+  #row1{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  #row1 label{font-size:13px;color:#aaa;min-width:70px;}
+  #row1 input[type=range]{flex:1;}
+  #row1 span{font-size:13px;font-weight:600;min-width:130px;text-align:right;}
+  #row2{display:flex;gap:8px;flex-wrap:wrap;}
+  button{background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:6px;
+    padding:6px 12px;font-size:12px;cursor:pointer;}
+  button:hover{background:#3a3a3a;}
+  button.active{background:#4a7a4a;border-color:#6a9a6a;}
+  .label{position:absolute;color:#eee;font-size:11px;background:rgba(20,20,20,0.8);
+    padding:2px 6px;border-radius:4px;pointer-events:none;white-space:nowrap;
+    transform:translate(-50%,-50%);}
+</style>
+</head>
+<body>
+<div id="hint">Drag to orbit &middot; scroll to zoom</div>
+<div id="stage">Folded, stowed</div>
+<div id="labels"></div>
+<div id="panel">
+  <div id="row1">
+    <label>Deployment</label>
+    <input type="range" id="fold" min="0" max="100" value="0">
+    <span id="foldOut">Folded</span>
+  </div>
+  <div id="row2">
+    <button id="playDeploy">Play deploy</button>
+    <button id="playFold">Play fold</button>
+    <button id="toggleShell">Hide shell</button>
+    <button id="toggleLabels" class="active">Labels on</button>
+    <button data-cam="wide">Wide view</button>
+    <button data-cam="top">Top view</button>
+    <button data-cam="hinge">Hinge closeup</button>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+/*
+  NOTE ON SCOPE: illustrative kinematic study of a generic fold-wing
+  layout (planform, root hinge, cable/bell-crank actuation, sail-winch
+  servo) in the spirit of open hobbyist folding-wing VTOL designs.
+  Dimensions are approximate and chosen for a clear, correct-topology
+  animation, not traced from any manufacturer's drawings.
+*/
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101010);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(6,5,7);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(-0.6,0,0);
+
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+const dl = new THREE.DirectionalLight(0xffffff,0.9);
+dl.position.set(5,10,5);
+scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0xffffff,0.3);
+dl2.position.set(-5,5,-5);
+scene.add(dl2);
+scene.add(new THREE.GridHelper(20,20,0x333333,0x1e1e1e));
+
+const matteGray  = new THREE.MeshStandardMaterial({color:0x8a8a8a, roughness:0.7, side:THREE.DoubleSide});
+const carbonMat  = new THREE.MeshStandardMaterial({color:0x1c1c1c, roughness:0.35, metalness:0.4});
+const darkPart   = new THREE.MeshStandardMaterial({color:0x2c2c2c, roughness:0.5});
+const kevlarMat  = new THREE.LineBasicMaterial({color:0xf2c94c, linewidth:2});
+const lockMat    = new THREE.MeshStandardMaterial({color:0xd0392b, roughness:0.4});
+const bellcrankMat = new THREE.MeshStandardMaterial({color:0x6a6a6a, roughness:0.4, metalness:0.5});
+const stopMat    = new THREE.MeshStandardMaterial({color:0x444444, roughness:0.6});
+const carryMat   = new THREE.MeshStandardMaterial({color:0x151515, roughness:0.4, metalness:0.3});
+const HIGHLIGHT  = new THREE.Color(0.9,0.65,0.05);
+
+let shellVisible = true;
+const shellParts = [];
+function trackShell(m){ shellParts.push(m); return m; }
+function cyl(r1,r2,h,mat,seg=12){ return new THREE.Mesh(new THREE.CylinderGeometry(r1,r2,h,seg), mat); }
+function cylinderBetween(p1,p2,radius,mat,seg=8){
+  const dir = new THREE.Vector3().subVectors(p2,p1);
+  const len = dir.length();
+  const m = cyl(radius,radius,len,mat,seg);
+  m.position.copy(p1).addScaledVector(dir,0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
+  return m;
+}
+
+// ---------------------------------------------------------------
+// Fuselage - tapered capsule body with a conical nose, plus a
+// V-tail on the boom so the fold direction has a real reference.
+// ---------------------------------------------------------------
+const fuselageGroup = new THREE.Group();
+const bodyRadius = 0.14;
+const fuselageBody = trackShell(cyl(bodyRadius,bodyRadius,1.05,matteGray,16));
+fuselageBody.rotation.z = Math.PI/2;
+fuselageGroup.add(fuselageBody);
+const tailCap = trackShell(new THREE.Mesh(new THREE.SphereGeometry(bodyRadius,16,16), matteGray));
+tailCap.position.set(-0.525,0,0);
+fuselageGroup.add(tailCap);
+const noseCone = trackShell(cyl(bodyRadius,0.01,0.55,matteGray,16));
+noseCone.rotation.z = -Math.PI/2;
+noseCone.position.set(0.525+0.275,0,0);
+fuselageGroup.add(noseCone);
+scene.add(fuselageGroup);
+
+const boomX = -1.35;
+const tailBoom = cyl(0.028,0.02,1.35,carbonMat);
+tailBoom.rotation.z = Math.PI/2;
+tailBoom.position.set(boomX,0,0);
+scene.add(tailBoom);
+
+// V-tail: two flat panels splayed outward from the boom's aft tip
+const tailTipX = -2.0;
+function makeVtailFin(sideSign){
+  const shape = new THREE.Shape();
+  shape.moveTo(0,0);
+  shape.lineTo(-0.32,0.02);
+  shape.lineTo(-0.30,0.30);
+  shape.lineTo(-0.05,0.06);
+  shape.lineTo(0,0);
+  const geo = new THREE.ExtrudeGeometry(shape,{depth:0.012,bevelEnabled:false});
+  geo.rotateX(Math.PI/2);
+  const fin = trackShell(new THREE.Mesh(geo, matteGray));
+  fin.position.set(tailTipX,0,0);
+  fin.rotation.x = sideSign*0.62; // splay outward/upward, "V" shape
+  fin.rotation.y = Math.PI;
+  return fin;
+}
+scene.add(makeVtailFin(1), makeVtailFin(-1));
+
+// ---------------------------------------------------------------
+// Wing planform - tapered leading/trailing edge, rounded tip,
+// built as a real extruded profile (not primitive boxes).
+// Local wing-assembly frame: x = chordwise, y = up (thickness),
+// z = spanwise * side, with the ROOT (hinge axis) at z = 0, so
+// left and right wings are true mirror geometry, not just a
+// mirrored rotation applied to identical geometry.
+// ---------------------------------------------------------------
+const rootChord   = 0.30;
+const tipChord    = 0.16;
+const spanLen     = 1.55;
+const tipRadius   = 0.10;
+const wingThick   = 0.028;
+
+function buildWingPlanformGeometry(side){
+  const shape = new THREE.Shape();
+  const s = side; // +1 or -1, mirrors the span axis of the shape itself
+  shape.moveTo(rootChord/2, 0);
+  shape.lineTo(tipChord/2, s*(spanLen - tipRadius));
+  shape.quadraticCurveTo(tipChord/2, s*spanLen, 0, s*spanLen);
+  shape.quadraticCurveTo(-tipChord/2, s*spanLen, -tipChord/2, s*(spanLen - tipRadius));
+  shape.lineTo(-rootChord/2, 0);
+  shape.lineTo(rootChord/2, 0);
+
+  const geo = new THREE.ExtrudeGeometry(shape, {depth: wingThick, bevelEnabled:false, curveSegments:16});
+  geo.rotateX(Math.PI/2);
+  geo.translate(0, wingThick/2, 0);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Motor pylon spanwise stations (fractions of span). These are VTOL
+// hover motors mounted vertically on the wing (standard 5" FPV quad
+// motors per the open AeroFold build docs), with a tapered fairing
+// blending the mount into the wing skin rather than a bare cylinder.
+const innerStation = 0.32;
+const outerStation = 0.88;
+
+// Wing root hinge sits near the aircraft CG, not up near the nose:
+// moved aft from the fuselage midpoint by roughly 20% of the total
+// fuselage+boom length.
+const hingeX = -0.46;
+const hingeZOffset = bodyRadius; // hinge is at the fuselage SKIN, not centerline
+
+function makeWingAssembly(side){
+  // side = +1 (left, +z) or -1 (right, -z). Each side is its own
+  // Object3D pivot at the wing ROOT, and the geometry itself (not
+  // just the rotation sign) is mirrored so both sides genuinely
+  // point outward in flight and sweep toward the tail when folded.
+  const pivot = new THREE.Object3D();
+  pivot.position.set(hingeX, 0, side * hingeZOffset);
+  scene.add(pivot);
+
+  const rigid = new THREE.Group();
+  pivot.add(rigid);
+
+  const skin = trackShell(new THREE.Mesh(buildWingPlanformGeometry(side), matteGray));
+  rigid.add(skin);
+
+  const sparLen = spanLen - 0.03;
+  const spar = cyl(0.014,0.011,sparLen,carbonMat);
+  spar.rotation.x = -Math.PI/2;
+  spar.position.set(0, wingThick*0.15, side*(sparLen/2 + 0.015));
+  rigid.add(spar);
+
+  function pylonAt(stationFrac){
+    const z = side*stationFrac*spanLen;
+    // tapered fairing blending the mount into the wing skin
+    const fairing = trackShell(cyl(0.05,0.024,0.075,darkPart,12));
+    fairing.position.set(0, wingThick/2+0.0375, z);
+    rigid.add(fairing);
+    const motor = trackShell(cyl(0.024,0.026,0.05,darkPart,12));
+    motor.position.set(0, wingThick/2+0.075+0.025, z);
+    rigid.add(motor);
+    const hub = trackShell(new THREE.Mesh(new THREE.SphereGeometry(0.015,8,8), darkPart));
+    hub.position.set(0, wingThick/2+0.125, z);
+    rigid.add(hub);
+    for(let i=0;i<2;i++){
+      const blade = trackShell(new THREE.Mesh(new THREE.BoxGeometry(0.19,0.006,0.028), darkPart));
+      blade.position.set(0, wingThick/2+0.125, z);
+      blade.rotation.y = i*Math.PI/2;
+      rigid.add(blade);
+    }
+  }
+  pylonAt(innerStation);
+  pylonAt(outerStation);
+
+  // lock feature near root, engages once the wing reaches flight position
+  const lock = new THREE.Mesh(new THREE.SphereGeometry(0.026,8,8), lockMat.clone());
+  lock.position.set(-rootChord*0.32, wingThick/2, side*0.05);
+  rigid.add(lock);
+
+  // ---- bell crank ----
+  // Rigidly fixed to the wing root; the cable pin is offset from the
+  // hinge axis so winding cable at the drum directly produces the
+  // wing's rotation about the hinge (not a cosmetic overlay).
+  const crankLen = 0.10;
+  const crankAngle = 2.35; // arm direction in the local chord/span plane
+  const pinLocal = new THREE.Vector3(Math.cos(crankAngle)*crankLen, wingThick/2+0.012, side*Math.sin(crankAngle)*crankLen);
+  const armBase  = new THREE.Vector3(0.015, wingThick/2+0.012, 0);
+  const crankArm = cylinderBetween(armBase, pinLocal, 0.008, bellcrankMat);
+  rigid.add(crankArm);
+
+  const crankPin = new THREE.Object3D();
+  crankPin.position.copy(pinLocal);
+  rigid.add(crankPin);
+  crankPin.add(new THREE.Mesh(new THREE.SphereGeometry(0.015,8,8), bellcrankMat));
+
+  return {pivot, rigid, lock, crankPin};
+}
+const wingL = makeWingAssembly(1);
+const wingR = makeWingAssembly(-1);
+
+// ---------------------------------------------------------------
+// Center carry-through: the structural box the two root hinges
+// actually mount to, joining left and right instead of each wing
+// appearing to hinge off empty space.
+// ---------------------------------------------------------------
+const carryThrough = new THREE.Mesh(
+  new THREE.BoxGeometry(0.10, 0.06, 2*hingeZOffset + 0.10),
+  carryMat
+);
+carryThrough.position.set(hingeX, -0.01, 0);
+scene.add(carryThrough);
+
+const hingePinL = cyl(0.028,0.028,0.09,darkPart);
+hingePinL.rotation.x = Math.PI/2; hingePinL.position.set(hingeX,0, hingeZOffset);
+const hingePinR = cyl(0.028,0.028,0.09,darkPart);
+hingePinR.rotation.x = Math.PI/2; hingePinR.position.set(hingeX,0,-hingeZOffset);
+scene.add(hingePinL, hingePinR);
+
+// mechanical stops: fixed blocks on the carry-through that the wing
+// root's trailing edge contacts at full deployment
+function makeStop(side){
+  const stop = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.03,0.02), stopMat.clone());
+  stop.position.set(hingeX-0.11, 0, side*(hingeZOffset+0.02));
+  scene.add(stop);
+  return stop;
+}
+const stopL = makeStop(1), stopR = makeStop(-1);
+
+// ---------------------------------------------------------------
+// Actuation: single sail-winch servo + drum, mounted FORWARD of
+// the hinge (forward of CG, matching common sail-winch placement),
+// drives BOTH bell cranks through fixed pulleys mounted right next
+// to each hinge - not floating out in space.
+// ---------------------------------------------------------------
+const drumPos = new THREE.Vector3(hingeX+0.20, 0.05, 0);
+const drumRadius = 0.05;
+const servoBody = cyl(0.045,0.045,0.13,darkPart);
+servoBody.rotation.x = Math.PI/2; servoBody.position.copy(drumPos);
+scene.add(servoBody);
+const drum = cyl(drumRadius,drumRadius,0.018,new THREE.MeshStandardMaterial({color:0xd88a2a}));
+drum.rotation.x = Math.PI/2; drum.position.copy(drumPos);
+scene.add(drum);
+
+function makePulley(side){
+  const p = cyl(0.024,0.024,0.016,darkPart,10);
+  p.rotation.x = Math.PI/2;
+  p.position.set(hingeX+0.03, 0.05, side*(hingeZOffset+0.012));
+  scene.add(p);
+  // small bracket tying the pulley physically to the hinge, so it
+  // doesn't read as floating
+  scene.add(cylinderBetween(p.position, new THREE.Vector3(hingeX,0,side*hingeZOffset), 0.006, darkPart));
+  return p;
+}
+const pulleyL = makePulley(1);
+const pulleyR = makePulley(-1);
+
+const kevGeomL = new THREE.BufferGeometry();
+const kevGeomR = new THREE.BufferGeometry();
+const kevL = new THREE.Line(kevGeomL, kevlarMat.clone());
+const kevR = new THREE.Line(kevGeomR, kevlarMat.clone());
+scene.add(kevL, kevR);
+
+const labelDefs = [
+  {obj: servoBody, text:"Sail-winch servo (fwd of CG)"},
+  {obj: drum, text:"Drum"},
+  {obj: pulleyL, text:"Fixed pulley (at hinge)"},
+  {obj: hingePinL, text:"Root hinge pin"},
+  {obj: carryThrough, text:"Center carry-through"},
+  {obj: wingL.crankPin, text:"Bell-crank pin"},
+  {obj: stopL, text:"Mechanical stop"},
+];
+const labelsDiv = document.getElementById('labels');
+const labelEls = labelDefs.map(d=>{
+  const el = document.createElement('div');
+  el.className = 'label'; el.textContent = d.text;
+  labelsDiv.appendChild(el);
+  return el;
+});
+let labelsOn = true;
+
+function easeInOutCubic(t){ return t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2; }
+
+// angle convention: 0 = deployed (wing perpendicular to fuselage,
+// flight position). foldMag = how far it swings to fold rearward,
+// parallel-ish to the tail boom, tip toward the V-tail.
+const foldMag = Math.PI*0.55; // ~99 degrees, slightly past parallel so
+                               // the trailing edge nestles against the boom
+const openAngle = 0;
+
+const _pinWorld = new THREE.Vector3();
+
+function angleForSide(side, mag){ return -side*mag; }
+
+// Pulley-to-pin distance only (the segment that actually changes as the
+// bell crank swings; drum-to-pulley is a fixed run of cable).
+function pinDistanceForMag(mag){
+  const w = wingL; // left/right are mirror-symmetric, one solve serves both
+  w.pivot.rotation.y = angleForSide(1, mag);
+  w.pivot.updateMatrixWorld(true);
+  w.crankPin.getWorldPosition(_pinWorld);
+  return pulleyL.position.distanceTo(_pinWorld);
+}
+const pinDistFolded = pinDistanceForMag(foldMag);
+const pinDistOpen   = pinDistanceForMag(0);
+
+// Invert the cable geometry: given a target pulley-to-pin cable length,
+// find the crank/wing angle that produces it. This is what makes the
+// bell crank the thing actually driving the rotation, rather than the
+// rotation being scripted and the cable just measured after the fact.
+function magForPinDistance(targetDist){
+  let lo = -0.12, hi = foldMag + 0.02; // small margin either side for rebound overshoot
+  // coarse bracket scan (distance is monotonic in mag over this range)
+  const steps = 24;
+  let bestLo = lo, bestHi = hi, bestErr = Infinity;
+  for(let i=0;i<steps;i++){
+    const m = lo + (hi-lo)*i/(steps-1);
+    const d = pinDistanceForMag(m);
+    const err = Math.abs(d-targetDist);
+    if(err<bestErr){ bestErr = err; bestLo = Math.max(lo,m-(hi-lo)/steps); bestHi = Math.min(hi,m+(hi-lo)/steps); }
+  }
+  // bisection refine within the bracket found above
+  let a=bestLo, b=bestHi;
+  for(let i=0;i<18;i++){
+    const mid=(a+b)/2;
+    const dMid=pinDistanceForMag(mid);
+    const dA=pinDistanceForMag(a);
+    if((dA-targetDist)*(dMid-targetDist) <= 0) b=mid; else a=mid;
+  }
+  return (a+b)/2;
+}
+
+const restLenAtFolded = {
+  L: drumPos.distanceTo(pulleyL.position) + pinDistFolded,
+  R: drumPos.distanceTo(pulleyR.position) + pinDistFolded
+};
+
+// Sequence: first the servo just takes up cable slack (nothing moves),
+// then the now-taut cable pulls the bell crank through the rotation,
+// then the wing runs into its mechanical stop, rebounds slightly off
+// it, and settles into the locked position.
+const tensionFrac = 0.18;   // fraction of the animation spent only tensioning
+const slackLen = 0.05;      // cable slack the drum takes up before load transfers
+
+function deploymentCurve(u){
+  // u: 0=folded .. 1=fully open, WITH a small overshoot-then-settle
+  // bump near u=1 so the wing runs slightly past the stop and springs
+  // back, instead of just stopping when the animation ends.
+  const base = easeInOutCubic(Math.min(Math.max(u,0),1));
+  if(u>0.90 && u<=1.06){
+    const s = Math.min(1,(u-0.90)/0.10);
+    return base + Math.sin(s*Math.PI)*0.05*(1-s*0.5);
+  }
+  return base;
+}
+
+// ---- staged mechanism captions + part highlighting ----
+const stageDefs = [
+  {upto:tensionFrac, text:"1 / 5 \u2014 Drum takes up cable slack (wing static)", parts:['servo']},
+  {upto:tensionFrac+0.10, text:"2 / 5 \u2014 Cable taut, bell crank loads up", parts:['cable']},
+  {upto:0.90, text:"3 / 5 \u2014 Bell crank rotates the wing root", parts:['crank']},
+  {upto:0.97, text:"4 / 5 \u2014 Wing hits the stop and rebounds", parts:['stop']},
+  {upto:1.001, text:"5 / 5 \u2014 Settled on the stop, lock engages", parts:['lock']},
+];
+let lastStageIdx = -1;
+const highlightables = {
+  servo: [servoBody.material, drum.material],
+  cable: [kevL.material, kevR.material],
+  crank: [bellcrankMat],
+  stop:  [stopL.material, stopR.material],
+  lock:  [wingL.lock.material, wingR.lock.material],
+};
+const baseEmissive = {};
+function setHighlight(groupNames){
+  Object.keys(highlightables).forEach(key=>{
+    const on = groupNames.indexOf(key)!==-1;
+    highlightables[key].forEach(mat=>{
+      if(!mat.emissive) return;
+      if(!baseEmissive[mat.uuid]) baseEmissive[mat.uuid] = mat.emissive.clone();
+      mat.emissive.copy(on ? HIGHLIGHT : baseEmissive[mat.uuid]);
+    });
+  });
+}
+
+let audioCtx = null;
+function playClick(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==='suspended') audioCtx.resume();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square'; o.frequency.value = 1500;
+    g.gain.setValueAtTime(0.12, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.07);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime+0.08);
+  }catch(e){ /* audio not available */ }
+}
+
+let lastT = 0;
+
+function update(tRaw){
+  const t = Math.max(0, Math.min(1, tRaw));
+
+  let mag, slackTaken, rotatePhaseForUi;
+  if(t <= tensionFrac){
+    // Phase 1: drum turns and only removes slack. No load reaches the
+    // bell crank yet, so the wing does not move.
+    mag = foldMag;
+    slackTaken = slackLen * (t/tensionFrac);
+    rotatePhaseForUi = 0;
+  } else {
+    // Phase 2+: cable is taut, so from here the TARGET is a cable
+    // length, and the wing angle is SOLVED from that length via the
+    // bell crank geometry - the cable is what's driving the rotation.
+    const u = (t - tensionFrac) / (1 - tensionFrac);
+    rotatePhaseForUi = deploymentCurve(u);
+    const targetPinDist = pinDistFolded + rotatePhaseForUi*(pinDistOpen - pinDistFolded);
+    mag = magForPinDistance(targetPinDist);
+    slackTaken = slackLen;
+  }
+
+  wingL.pivot.rotation.y = angleForSide(1, mag);
+  wingR.pivot.rotation.y = angleForSide(-1, mag);
+  wingL.pivot.updateMatrixWorld(true);
+  wingR.pivot.updateMatrixWorld(true);
+
+  wingL.crankPin.getWorldPosition(_pinWorld);
+  const lenL = drumPos.distanceTo(pulleyL.position) + pulleyL.position.distanceTo(_pinWorld);
+  const pinLWorld = _pinWorld.clone();
+  wingR.crankPin.getWorldPosition(_pinWorld);
+  const lenR = drumPos.distanceTo(pulleyR.position) + pulleyR.position.distanceTo(_pinWorld);
+  const pinRWorld = _pinWorld.clone();
+
+  kevGeomL.setFromPoints([drumPos, pulleyL.position, pinLWorld]);
+  kevGeomR.setFromPoints([drumPos, pulleyR.position, pinRWorld]);
+  kevGeomL.attributes.position.needsUpdate = true;
+  kevGeomR.attributes.position.needsUpdate = true;
+
+  // drum rotation = slack removed so far, plus cable actually taken up
+  // by the bell-crank load phase (both sides, since one drum drives both)
+  const loadSpooled = (restLenAtFolded.L - lenL) + (restLenAtFolded.R - lenR) - 2*slackTaken;
+  drum.rotation.y = (2*slackTaken + Math.max(0,loadSpooled)) / drumRadius;
+
+  const locked = rotatePhaseForUi>0.985;
+  wingL.lock.material.emissive = wingL.lock.material.emissive || new THREE.Color();
+  wingL.lock.material.emissive.setRGB(locked?0.7:0.15,0,0);
+  wingR.lock.material.emissive.setRGB(locked?0.7:0.15,0,0);
+
+  // staged caption + highlight
+  let idx = stageDefs.findIndex(s=>t<=s.upto);
+  if(idx===-1) idx = stageDefs.length-1;
+  if(idx!==lastStageIdx){
+    document.getElementById('stage').textContent = stageDefs[idx].text;
+    setHighlight(stageDefs[idx].parts);
+    lastStageIdx = idx;
+  }
+  if(lastT<0.97 && t>=0.97) playClick();
+  lastT = t;
+
+  const out = document.getElementById('foldOut');
+  if(t<=tensionFrac) out.textContent='Folded \u2014 tensioning cable';
+  else if(t>0.985) out.textContent='Deployed, locked';
+  else out.textContent = Math.round(rotatePhaseForUi*(foldMag*180/Math.PI))+' deg from stow';
+
+  document.getElementById('fold').value = Math.round(t*100);
+}
+update(0);
+
+document.getElementById('fold').addEventListener('input', e=>{
+  update(e.target.value/100);
+});
+
+let animId = null;
+function playAnim(from,to,duration){
+  if(animId) cancelAnimationFrame(animId);
+  const start = performance.now();
+  function step(now){
+    const p = Math.min(1,(now-start)/duration);
+    update(from + (to-from)*p);
+    if(p<1) animId = requestAnimationFrame(step);
+  }
+  animId = requestAnimationFrame(step);
+}
+document.getElementById('playDeploy').addEventListener('click', ()=>playAnim(0,1,4200));
+document.getElementById('playFold').addEventListener('click', ()=>playAnim(1,0,4200));
+
+document.getElementById('toggleShell').addEventListener('click', function(){
+  shellVisible = !shellVisible;
+  shellParts.forEach(m=>{
+    m.material = m.material.clone();
+    m.material.transparent = true;
+    m.material.opacity = shellVisible ? 1 : 0.25;
+  });
+  this.textContent = shellVisible ? 'Hide shell' : 'Show shell';
+});
+
+document.getElementById('toggleLabels').addEventListener('click', function(){
+  labelsOn = !labelsOn;
+  this.classList.toggle('active', labelsOn);
+  this.textContent = labelsOn ? 'Labels on' : 'Labels off';
+});
+
+const camPresets = {
+  wide: {pos:[6,5,7], target:[-0.6,0,0]},
+  top: {pos:[0,8,0.01], target:[-0.6,0,0]},
+  hinge: {pos:[-1.1,0.6,1.1], target:[hingeX,0,hingeZOffset]}
+};
+document.querySelectorAll('[data-cam]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const p = camPresets[btn.dataset.cam];
+    camera.position.set(...p.pos);
+    controls.target.set(...p.target);
+  });
+});
+
+function updateLabels(){
+  labelDefs.forEach((d,i)=>{
+    const el = labelEls[i];
+    if(!labelsOn){ el.style.display='none'; return; }
+    el.style.display='block';
+    const wp = new THREE.Vector3();
+    d.obj.getWorldPosition(wp);
+    wp.project(camera);
+    el.style.left = ((wp.x*0.5+0.5)*innerWidth)+'px';
+    el.style.top = ((-wp.y*0.5+0.5)*innerHeight)+'px';
+  });
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene,camera);
+  updateLabels();
+}
+animate();
+
+window.addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
