@@ -153,17 +153,6 @@
         rim.position.set(-2, 5, 5);
         scene.add(rim);
 
-        const floorMat = new THREE.MeshBasicMaterial({
-            color: 0x78bbf2,
-            side: THREE.DoubleSide
-        });
-        const floor = new THREE.Mesh(
-            new THREE.CircleGeometry(8, 96),
-            floorMat
-        );
-        floor.rotation.x = -Math.PI / 2;
-        floor.position.y = -0.11;
-        scene.add(floor);
 
         // ---- Reference-matched palette (pearl white / dark blackish-teal, per photos) ----
         const airframeWhite = new THREE.MeshStandardMaterial({
