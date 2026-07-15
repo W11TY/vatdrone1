@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>AeroFold V2 - styled to reference</title>
     <style>
         html,
@@ -89,6 +90,20 @@
             white-space: nowrap;
             transform: translate(-50%, -50%);
         }
+
+        canvas { touch-action: none; }
+
+        @media (max-width: 600px) {
+            #hint { font-size: 10px; top: 6px; left: 8px; }
+            #panel {
+                bottom: 8px; left: 8px; right: 8px;
+                padding: 10px 12px;
+            }
+            #row1 { gap: 6px; margin-bottom: 6px; }
+            #row1 span { min-width: 90px; font-size: 11px; }
+            button { padding: 5px 8px; font-size: 11px; }
+            #row2 { gap: 5px; }
+        }
     </style>
 </head>
 
@@ -138,6 +153,7 @@
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.15;
         renderer.setSize(innerWidth, innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         document.body.appendChild(renderer.domElement);
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.target.set(0, 0, 0);
@@ -542,6 +558,7 @@
             camera.aspect = innerWidth / innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(innerWidth, innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         });
     </script>
 </body>
