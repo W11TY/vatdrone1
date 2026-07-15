@@ -91,18 +91,42 @@
             transform: translate(-50%, -50%);
         }
 
-        canvas { touch-action: none; }
+        canvas {
+            touch-action: none;
+        }
 
         @media (max-width: 600px) {
-            #hint { font-size: 10px; top: 6px; left: 8px; }
+            #hint {
+                font-size: 10px;
+                top: 6px;
+                left: 8px;
+            }
+
             #panel {
-                bottom: 8px; left: 8px; right: 8px;
+                bottom: 8px;
+                left: 8px;
+                right: 8px;
                 padding: 10px 12px;
             }
-            #row1 { gap: 6px; margin-bottom: 6px; }
-            #row1 span { min-width: 90px; font-size: 11px; }
-            button { padding: 5px 8px; font-size: 11px; }
-            #row2 { gap: 5px; }
+
+            #row1 {
+                gap: 6px;
+                margin-bottom: 6px;
+            }
+
+            #row1 span {
+                min-width: 90px;
+                font-size: 11px;
+            }
+
+            button {
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+
+            #row2 {
+                gap: 5px;
+            }
         }
     </style>
 </head>
@@ -467,7 +491,7 @@
             wingL.quaternion.slerpQuaternions(wingL.userData.qFolded, wingL.userData.qFlight, rotatePhase);
             wingR.quaternion.slerpQuaternions(wingR.userData.qFolded, wingR.userData.qFlight, rotatePhase);
 
-            tailGroup.rotation.z = tailFoldedZ + (tailFlightZ - tailFoldedZ) * rotatePhase;
+            tailGroup.rotation.z = 7;
 
             drum.rotation.y = rotatePhase * Math.PI * 6;
 
