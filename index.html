@@ -118,6 +118,7 @@
         <div id="row2">
             <button id="playDeploy">Play deploy</button>
             <button id="playFold">Play fold</button>
+            <button id="play40">40° hold</button>
             <button data-cam="wide">Wide view</button>
             <button data-cam="top">Top view</button>
             <button data-cam="hinge">Hinge closeup</button>
@@ -130,7 +131,7 @@
         const wingspan = 1.6;
         const halfSpan = 0.8000;
         const rootStubLen = 0.240000;
-        const rotatingSpan = 0.684000;
+        const rotatingSpan = 0.820800;
         const rootChord = 0.30;
         const stubTipChord = 0.2772;
         const tipChord = 0.16;
@@ -360,40 +361,37 @@
             spar.position.set(rotatingSpan / 2, 0, 0);
             g.add(spar);
 
-            // boom-mounted nacelle: slender white cylindrical pod with black motor + prop on top,
-            // matching the raised wingtip-boom motor mounts seen in the reference photos
+            const allProps = [];
+            // Nacelle: boom extending forward from leading edge, motor + prop at front
             function nacelle(spanFromHinge) {
                 const ng = new THREE.Group();
-                const strut = cyl(0.009, 0.009, 0.09, airframeWhite, 10);
-                strut.position.set(0, -0.045, 0);
-                ng.add(strut);
-                const pod = cyl(0.024, 0.024, 0.14, airframeWhite, 14);
-                pod.rotation.x = Math.PI / 2;
-                pod.position.set(0, -0.095, 0);
-                ng.add(pod);
+                const fwd = -side; // forward direction in wing local Z
 
-                // Position motor, hub, and prop at the forward end of the pod (facing frontward)
-                const zDir = -side; // For left wing (side=1) forward is -Z. For right wing (side=-1) forward is +Z.
-                const motorZ = zDir * (0.07 + 0.014);
-                const hubZ = zDir * (0.07 + 0.028 + 0.009);
-                const propZ = zDir * (0.07 + 0.028 + 0.018 + 0.001);
+                // Boom extending forward from wing leading edge
+                const boom = cyl(0.009, 0.009, 0.14, airframeWhite, 10);
+                boom.rotation.x = Math.PI / 2;
+                boom.position.set(0, 0, fwd * 0.07);
+                ng.add(boom);
 
+                // Motor at front end of boom
                 const motor = cyl(0.019, 0.021, 0.028, motorMat, 14);
                 motor.rotation.x = Math.PI / 2;
-                motor.position.set(0, -0.095, motorZ);
+                motor.position.set(0, 0, fwd * 0.155);
                 ng.add(motor);
 
+                // Hub
                 const hub = cyl(0.007, 0.007, 0.018, motorMat, 10);
                 hub.rotation.x = Math.PI / 2;
-                hub.position.set(0, -0.095, hubZ);
+                hub.position.set(0, 0, fwd * 0.175);
                 ng.add(hub);
 
+                // Prop disc at front
                 const prop = box(0.235, 0.006, 0.02, propMat);
-                // Propeller rotates in the XY plane (perpendicular to Z axis)
-                prop.position.set(0, -0.095, propZ);
+                prop.position.set(0, 0, fwd * 0.185);
                 ng.add(prop);
 
                 ng.position.set(spanFromHinge, 0, 0);
+                allProps.push(prop);
                 return ng;
             }
             g.add(nacelle(innerNacelleSpanFromHinge));
@@ -403,6 +401,7 @@
             lock.position.set(0.02, 0, 0);
             g.add(lock);
             g.userData.lock = lock;
+            g.userData.props = allProps;
 
             g.userData.qFlight = new THREE.Quaternion().setFromRotationMatrix(flightBasis(side));
             g.userData.qFolded = new THREE.Quaternion().setFromRotationMatrix(foldedBasis(side));
@@ -520,6 +519,7 @@
         }
         document.getElementById('playDeploy').addEventListener('click', () => playAnim(0, 1, 3500));
         document.getElementById('playFold').addEventListener('click', () => playAnim(1, 0, 3500));
+        document.getElementById('play40').addEventListener('click', () => playAnim(0, 40 / 90 * 0.75 + 0.25, 2000));
 
         const camPresets = {
             wide: { pos: [1.8, 1.3, 2.0], target: [0, 0, 0] },
@@ -549,6 +549,11 @@
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
+            // Spin all propellers
+            const spinSpeed = 0.15;
+            [wingL, wingR].forEach(w => {
+                if (w.userData.props) w.userData.props.forEach(p => { p.rotation.z += spinSpeed; });
+            });
             renderer.render(scene, camera);
             updateLabels();
         }
